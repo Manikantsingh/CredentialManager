@@ -15,6 +15,7 @@ import {
   uploadVault,
 } from "./drive.js";
 import { VAULT_VERSION, AUTO_LOCK_MINUTES } from "./config.js";
+import { IGNORED_SITES_KEY } from "./messages.js";
 
 const LOCAL_ENVELOPE_KEY = "credmanager_envelope";
 const LOCAL_META_KEY = "credmanager_meta"; // { fileId, folderId, modifiedTime }
@@ -139,8 +140,14 @@ export async function unlockFromLocal(masterPassword) {
 async function persistLocalEnvelope() {
   if (!sessionKey || !sessionSaltB64) throw new Error("Vault is locked.");
   const envelope = await buildVaultEnvelope(sessionKey, sessionSaltB64, payload);
-  await setLocal(LOCAL_ENVELOPE_KEY, envelope);
+  // Update the in-memory session cache BEFORE writing the local envelope.
+  // Writing the envelope fires chrome.storage.onChanged("local"), and the popup
+  // reacts to that by calling restoreSession(), which reloads `payload` from the
+  // session cache. If the session cache were still stale at that point, a deleted
+  // (or edited) entry would be resurrected. Saving the session first guarantees
+  // the cache already reflects the latest payload when the listener runs.
   await saveSession();
+  await setLocal(LOCAL_ENVELOPE_KEY, envelope);
   return envelope;
 }
 
@@ -218,6 +225,34 @@ export function getEntriesByDomain() {
   return map;
 }
 
+// ---------- autofill support ----------
+
+// Lightweight descriptors of the entries that match a page's domain, for the
+// in-page autofill picker. Deliberately returns NO passwords: the picker only
+// needs to show which accounts are available. Passwords are handed out one at a
+// time via getAutofillSecret() after the user explicitly chooses an account.
+export function listAutofillCandidates(domainOrUrl) {
+  if (!payload) return [];
+  const d = normalizeDomain(domainOrUrl);
+  if (!d) return [];
+  return payload.entries
+    .filter((e) => e.domain === d)
+    .map((e) => ({ id: e.id, username: e.username || "", url: e.url || "" }));
+}
+
+// Return the fillable secret for a single entry, but ONLY when it belongs to
+// the expected domain. `expectedDomainOrUrl` must come from the authenticated
+// sender tab URL in the service worker — never from the page — so a hostile
+// page cannot request credentials belonging to another origin by guessing ids.
+export function getAutofillSecret(id, expectedDomainOrUrl) {
+  if (!payload) return null;
+  const d = normalizeDomain(expectedDomainOrUrl);
+  if (!d) return null;
+  const e = payload.entries.find((x) => x.id === id);
+  if (!e || e.domain !== d) return null; // not found or domain mismatch: refuse
+  return { username: e.username || "", password: e.password || "" };
+}
+
 export async function addEntry({ domain, url, username, password, notes }) {
   if (!sessionKey) throw new Error("Vault is locked.");
   const now = Date.now();
@@ -260,4 +295,83 @@ export async function deleteEntry(id) {
 
 export function exportEnvelope() {
   return getLocal(LOCAL_ENVELOPE_KEY);
+}
+
+// ---------- auto-detect capture support ----------
+
+// Find an existing entry that matches a domain + username (case-insensitive
+// username match, since emails/usernames are effectively case-insensitive).
+export function findByDomainUsername(domain, username) {
+  if (!payload) return null;
+  const d = normalizeDomain(domain);
+  const u = (username || "").trim().toLowerCase();
+  return (
+    payload.entries.find(
+      (e) => e.domain === d && (e.username || "").trim().toLowerCase() === u
+    ) || null
+  );
+}
+
+// Decide what a captured login means WITHOUT mutating the vault. Loads the
+// session first (works in the service worker via chrome.storage.session).
+// Returns { mode, domain, username }. mode is "locked" when the vault is not
+// unlocked, otherwise "new" | "update" | "nochange".
+export async function classifyCapture({ url, domain, username, password }) {
+  const d = normalizeDomain(domain || url);
+  const u = username || "";
+  if (!isUnlocked()) {
+    await restoreSession();
+  }
+  if (!isUnlocked()) {
+    return { mode: "locked", domain: d, username: u };
+  }
+  const existing = findByDomainUsername(d, u);
+  if (!existing) return { mode: "new", domain: d, username: u };
+  if ((existing.password || "") === (password || "")) {
+    return { mode: "nochange", domain: d, username: u };
+  }
+  return { mode: "update", domain: d, username: u };
+}
+
+// Add or update a captured credential. Requires an unlocked session (callers
+// should handle the locked case separately). Returns { mode, entry }.
+export async function upsertCapture({ url, domain, username, password, notes }) {
+  if (!isUnlocked()) {
+    await restoreSession();
+  }
+  if (!isUnlocked()) throw new Error("Vault is locked.");
+
+  const d = normalizeDomain(domain || url);
+  const existing = findByDomainUsername(d, username);
+
+  if (!existing) {
+    const entry = await addEntry({ domain: d, url, username, password, notes });
+    return { mode: "new", entry };
+  }
+  if ((existing.password || "") === (password || "")) {
+    return { mode: "nochange", entry: existing };
+  }
+  const entry = await updateEntry(existing.id, {
+    password,
+    // Refresh the URL to the most recent login page if provided.
+    url: url || existing.url,
+  });
+  return { mode: "update", entry };
+}
+
+// ---------- per-site ignore list ----------
+export async function isIgnoredSite(domainOrUrl) {
+  const d = normalizeDomain(domainOrUrl);
+  const list = (await getLocal(IGNORED_SITES_KEY)) || [];
+  return list.includes(d);
+}
+
+export async function addIgnoredSite(domainOrUrl) {
+  const d = normalizeDomain(domainOrUrl);
+  const list = (await getLocal(IGNORED_SITES_KEY)) || [];
+  if (!list.includes(d)) {
+    list.push(d);
+    await setLocal(IGNORED_SITES_KEY, list);
+  }
+  return list;
 }

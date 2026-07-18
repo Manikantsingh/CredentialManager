@@ -43,14 +43,16 @@ runs the source directly.
 
 | File | Responsibility |
 |------|----------------|
-| `manifest.json` | MV3 manifest. Permissions: `identity`, `storage`. Host permission: `https://www.googleapis.com/*`. |
+| `manifest.json` | MV3 manifest. Permissions: `identity`, `storage`, `scripting`, `tabs`. Host permissions: `https://www.googleapis.com/*` plus `http://*/*` + `https://*/*` (for login detection). Registers the content script and `web_accessible_resources`. |
 | `config.js` | User/config constants: `CLIENT_ID`, OAuth scopes, Drive folder/file names, crypto parameters, `AUTO_LOCK_MINUTES`, versions. |
 | `crypto.js` | Key derivation (PBKDF2), AES‑GCM encrypt/decrypt, raw key export/import (for session cache), base64 helpers, vault envelope build/open, password generator. **Pure, side‑effect free — unit‑testable in Node.** |
+| `messages.js` | Shared message‑type constants and storage keys used by the content script, service worker, and popup (auto‑detect feature). |
 | `drive.js` | OAuth token acquisition/caching, Drive folder/file discovery, download, multipart upload. |
-| `vault.js` | Vault domain model, in‑memory session, session persistence (`chrome.storage.session`) with idle auto‑lock, local cache, Drive sync orchestration, CRUD grouped by domain, domain normalization. |
+| `vault.js` | Vault domain model, in‑memory session, session persistence (`chrome.storage.session`) with idle auto‑lock, local cache, Drive sync orchestration, CRUD grouped by domain, domain normalization, capture classify/upsert, per‑site ignore list. |
 | `popup.html` / `popup.css` | UI markup and styling (unlock screen, list, add/edit dialog, toast). |
-| `popup.js` | UI controller: wires DOM events to `vault.js`, renders grouped list, dialogs; restores session on boot. |
-| `background.js` | Minimal MV3 service worker (install hook). No secrets held here. |
+| `popup.js` | UI controller: wires DOM events to `vault.js`, renders grouped list, dialogs; restores session on boot; handles pending detected captures. |
+| `content/detector.js` | Content script injected into web pages. Detects login forms, captures the typed credential on submit, and renders the in‑page **Save/Update** banner in a closed Shadow DOM. Not an ES module. |
+| `background.js` | MV3 service worker and **auto‑detect coordinator**: classifies captures, performs the upsert (or locked‑vault flow), maintains the ignore list, hands pending captures to the popup. |
 | `decrypt-vault.mjs` | Standalone Node CLI to decrypt a vault envelope locally (recovery/verification). Prompts for the master password; nothing leaves the machine. |
 | `make_icons.py` | Regenerates padlock PNG icons (pure‑Python PNG encoder, no PIL). |
 | `icons/` | 16/48/128 px icons. |
@@ -160,6 +162,15 @@ vaults).
   raw AES key and decrypted payload so the vault stays unlocked across popup reopens.
   Never written to disk, never synced to Drive, cleared on browser close, on **Lock**, and
   on idle timeout (`AUTO_LOCK_MINUTES`).
+- `credmanager_step1_<tabId>` — `{ username, regDomain, ts }`. 5‑min TTL. Stashes the
+  email/username submitted on a step‑1 login page (no password field present, e.g. Google's
+  email screen) so it can be paired with the password captured on the next page. Keyed by
+  tab ID; cleared after use or when the tab navigates to a different registrable domain.
+- `credmanager_pending_cap_<tabId>` — `{ cap, mode, domain, regDomain, ts }`. 2‑min TTL.
+  Stashes a classified capture so it survives the page navigation that occurs after a
+  successful login (before the user can click the save banner). The landing page re‑shows
+  the banner by sending `GET_TAB_PENDING` on load. Cleared on save, dismiss/never, or when
+  the tab navigates to a different registrable domain.
 
 ---
 
@@ -251,7 +262,140 @@ There is no automatic merge/conflict resolution yet (see Future work).
 
 ---
 
-## 8. Domain handling
+## 8. Auto‑detect & save credentials
+
+CredManager detects logins entered on any website and offers to save/update them, without
+the user opening the popup. Three components cooperate across the trust boundary.
+
+### 8.1 Components
+- **`content/detector.js`** (runs in the untrusted page, top frame, `document_idle`):
+  - Finds visible `input[type=password]` fields and the best‑guess username/email field in
+    the same form (scored by type, `autocomplete`, name/id/placeholder hints, DOM order).
+  - Captures `{ url, username, password }` on `submit`, on Enter inside a password field,
+    and on clicks of likely login/sign‑up buttons (covers SPA logins without a form submit).
+  - On pages with no password field (e.g. Google's email‑only step), sends `STEP1_CAPTURE`
+    instead, stashing the username in the background to pair with the password on the next page.
+  - On page load (`document_idle`), sends `GET_TAB_PENDING` to re‑show any save banner whose
+    login page navigated away before the user could respond (navigation‑survive flow). Passes
+    `pageLoadTs` so the background can distinguish a pre‑existing stash from one written by
+    `tryCapture()` on this same page.
+  - Sends `CAPTURE` to the service worker; based on the returned `mode`, renders a banner in
+    a **closed Shadow DOM** host so page CSS/scripts can't style or read it. Banner text is
+    set via `textContent` only (no page‑controlled markup). Buttons: Save/Update, Not now,
+    Never for this site. **Not now** and **Never** send `CLEAR_PENDING_CAPTURE` to discard
+    the navigation‑survive stash so the banner does not re‑appear on the next page.
+- **`background.js`** (service worker, ES module — the coordinator):
+  - `CAPTURE` → skips ignored sites; if `username` is blank, checks for a stashed step‑1
+    username (`credmanager_step1_<tabId>`) and merges it; calls `vault.classifyCapture()`
+    (read‑only); fire‑and‑forgets a write of `credmanager_pending_cap_<tabId>` (navigation‑
+    survive stash) before returning `{ mode, domain, username }`. Also keeps the capture in
+    an in‑memory `Map` (2‑min TTL) for the locked flow.
+  - `STEP1_CAPTURE` → writes `credmanager_step1_<tabId>` (5‑min TTL) with the email/username
+    captured on a password‑less login step.
+  - `SAVE_CONFIRM` → if unlocked, `vault.upsertCapture()`; if locked, stashes the capture in
+    `chrome.storage.session` (`PENDING_CAPTURE_KEY`) and calls `chrome.action.openPopup()`
+    (Chrome 127+) with a badge fallback. Both paths clear `credmanager_pending_cap_<tabId>`.
+  - `GET_TAB_PENDING` → returns (and clears) `credmanager_pending_cap_<tabId>` when it exists,
+    is within TTL, belongs to the same registrable domain, and was written before the
+    requesting page loaded (the `pageLoadTs` guard prevents the same-page stash from being
+    consumed prematurely, which would leave nothing for the landing page).
+  - `CLEAR_PENDING_CAPTURE` → deletes `credmanager_pending_cap_<tabId>` (sent by Not now / Never).
+  - `NEVER_SITE` → `vault.addIgnoredSite()`.
+  - `GET_PENDING` → returns and clears the locked‑vault stash (called by the popup).
+- **`popup.js`**:
+  - After unlock (`showVaultScreen`), calls `GET_PENDING`; if a capture is waiting it opens
+    the Add/Update dialog pre‑filled (Update mode when it matches an existing entry).
+  - A `chrome.storage.onChanged` listener re‑runs `restoreSession()` + `renderList()` so the
+    list stays fresh when the service worker saves while the popup is open (the popup and SW
+    are **separate module instances** — `chrome.storage.session` is the bridge).
+
+### 9.2 Message flow
+```
+ page (detector.js)                      service worker (background.js)
+   step-1 submit     ──STEP1_CAPTURE──────► stash username in session (5 min TTL)
+
+   step-2 submit     ──CAPTURE────────────► merge step-1 username if username==""
+    (password found)                         classifyCapture()  (read-only)
+                     ◄──{mode,domain,user}── fire-and-forget: write pending_cap stash
+   [banner: Save / Update / Unlock / Never]
+        Save ─────────SAVE_CONFIRM──────────► unlocked → upsertCapture() → {ok}
+                                              locked   → stash + openPopup()/badge
+                                              both     → clear pending_cap stash
+        Not now ──────CLEAR_PENDING_CAPTURE─► delete pending_cap stash
+        Never ─────────────────────────────► NEVER_SITE → addIgnoredSite()
+              ────────CLEAR_PENDING_CAPTURE─► delete pending_cap stash
+
+ landing page load  ──GET_TAB_PENDING──────► check pending_cap stash:
+    (document_idle)   {url, pageLoadTs}       • wrong domain   → delete, return null
+                                              • written after   → return null (same-page
+                                                pageLoadTs        guard, keeps stash for
+                                                                  landing page)
+                                              • ok → delete stash, return {cap,mode,domain}
+                     ◄──{cap,mode,domain}──
+   [banner re-shown on landing page]
+
+ popup (popup.js)   ──GET_PENDING───────────► return + clear locked-vault stash
+                    ◄──{pending}────────────  → prefilled Add/Update dialog
+```
+
+### 9.3 Vault support (in `vault.js`)
+- `classifyCapture({url,username,password})` — loads the session (via `restoreSession()`,
+  so it works in the SW) and returns `mode` = `new` | `update` | `nochange` | `locked`
+  **without mutating** the vault.
+- `upsertCapture({url,username,password})` — requires unlocked; adds a new entry, updates the
+  password of an existing `domain+username` match, or reports `nochange`. Reuses `addEntry` /
+  `updateEntry` (so per‑domain isolation and local persistence are unchanged). Does **not**
+  auto‑push to Drive.
+- `findByDomainUsername(domain, username)` — case‑insensitive username match within a domain.
+- `isIgnoredSite` / `addIgnoredSite` — per‑site ignore list in
+  `chrome.storage.local` (`credmanager_ignored_sites`).
+
+### 9.4 Security notes
+- The content script is treated as **hostile**. Only the user‑typed capture flows
+  page → extension; **no vault entries, other saved passwords, or keys are ever sent to the
+  page.** The banner receives only a minimal `mode`/`domain`/`username` echo of what the user
+  just typed.
+- Plaintext captures live only in service‑worker memory and, for the locked flow, briefly in
+  memory‑only `chrome.storage.session` (never on disk); they're cleared on save, on TTL, or
+  when the popup consumes them.
+- Broad host permissions (`http://*/*`, `https://*/*`) are required for detection and are
+  disclosed to the user in the README.
+
+### 8.5 Autofill on login pages
+
+CredManager also fills saved credentials into login forms. Unlike the capture flow, autofill
+must return a credential **to** the page, so it is scoped as tightly as possible.
+
+- **`content/detector.js`** (`attachAutofill()`):
+  - On `focusin` of a login field (a visible `input[type=password]`, or a username/email/text
+    field in a form that has one — see `getLoginContext()`), it pins a small CredManager key
+    icon to the field's right edge in a **closed Shadow DOM** host (`pointer-events:none` on
+    the host so typing passes through; only the icon and menu are clickable).
+  - Clicking the icon sends `AUTOFILL_QUERY` and renders a dropdown of matching **usernames
+    only** (or an "Unlock CredManager" item when locked, which sends `OPEN_POPUP`).
+  - Choosing an account sends `AUTOFILL_FILL { id }`; on success it fills the username and
+    password via the native value setter and dispatches `input`/`change` so SPA frameworks
+    register the change. The icon/menu dismiss on Escape, blur, scroll-away, or outside click.
+- **`background.js`**:
+  - `AUTOFILL_QUERY` → derives the domain from the **authenticated `sender.tab.url`** (never
+    page-supplied), restores the session if needed, and returns
+    `{ ok, locked, entries:[{id,username,url}] }` via `vault.listAutofillCandidates()`. No
+    passwords are included.
+  - `AUTOFILL_FILL { id }` → returns `{ ok, username, password }` for exactly one entry, and
+    only if `vault.getAutofillSecret(id, sender.tab.url)` confirms the entry's `domain` matches
+    the sender tab's domain. A hostile page cannot fish for another origin's credentials by
+    guessing ids or spoofing a URL.
+  - `OPEN_POPUP` → `openPopupSafely()` so the user can unlock, then re-open the picker.
+- **Security trade-off:** filling inherently exposes the chosen credential to page JavaScript
+  (true of every autofill). Exposure is minimized: the vault is never bulk-dumped, only
+  usernames are listed until the user picks, a password is released one-at-a-time, the domain
+  is verified server-side against the authenticated tab URL, and nothing is filled without an
+  explicit click.
+
+
+---
+
+## 10. Domain handling
 
 `normalizeDomain()` in `vault.js` canonicalizes input to a hostname:
 - Prefixes a scheme if missing, parses with `URL`, lowercases, strips a leading `www.`.
@@ -284,7 +428,7 @@ test suite (recommended next addition).
 
 | Task | Where to start |
 |------|----------------|
-| Add autofill on login pages | New content script + `scripting`/`activeTab` permission; read entries by matching `location.hostname` to `domain`. |
+| Add autofill on login pages | Implemented — see §8.5. In-page picker (`content/detector.js` `attachAutofill()`), `AUTOFILL_QUERY`/`AUTOFILL_FILL`/`OPEN_POPUP` messages, and `vault.listAutofillCandidates()` / `vault.getAutofillSecret()`. |
 | Automatic sync / conflict handling | `vault.js` sync functions; compare `modifiedTime`, consider entry‑level merge keyed by `id`+`updatedAt`. |
 | Stronger KDF (Argon2id/scrypt) | Add vetted WASM lib; branch on `envelope.kdf.algo` in `openVaultEnvelope`; re‑wrap on next save; bump `VAULT_VERSION`. |
 | Import/export | `vault.exportEnvelope()` already returns the encrypted envelope; add file download/upload UI. `decrypt-vault.mjs` shows the offline decrypt path. |
@@ -297,7 +441,12 @@ test suite (recommended next addition).
 
 - Manual sync only; no automatic multi‑device conflict resolution (last‑write‑wins).
 - OAuth token is memory‑only and expires ~1 h; a fresh interactive consent may be needed.
-- No autofill yet (copy‑to‑clipboard only).
+- Multi‑step logins (email on one page, password on the next — e.g. Google Sign‑In) are
+  now handled via the step‑1 stash; however, heavily obfuscated or non‑standard flows
+  (hidden fields, custom Web Components) may still not be detected.
+- The save banner may appear on the page **after** login (the landing/dashboard page)
+  rather than on the login page itself when the server redirects before the user can click;
+  this is by design (navigation‑survive flow).
 - Idle auto‑lock is enforced on popup open (not by a background timer), so the session
   cache can outlive `AUTO_LOCK_MINUTES` until the next open; see §10 for a hard‑timer option.
 - PBKDF2 (not memory‑hard) — acceptable at 310k iterations but see §6.2 for the migration path.

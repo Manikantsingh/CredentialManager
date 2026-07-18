@@ -1,5 +1,6 @@
 import * as vault from "./vault.js";
 import { generatePassword } from "./crypto.js";
+import { MSG } from "./messages.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -71,6 +72,8 @@ function showVaultScreen() {
   el.vaultScreen.hidden = false;
   el.lockBtn.hidden = false;
   renderList();
+  // If a login was captured while the vault was locked, offer to save it now.
+  checkPendingCapture();
 }
 
 function showUnlockScreen() {
@@ -294,6 +297,50 @@ function openEdit(entry) {
 
 el.addBtn.addEventListener("click", () => openEdit(null));
 el.cancelEdit.addEventListener("click", () => (el.editOverlay.hidden = true));
+
+// ---------- pending capture (from auto-detect while locked) ----------
+async function checkPendingCapture() {
+  try {
+    const res = await chrome.runtime.sendMessage({ type: MSG.GET_PENDING });
+    if (!res || !res.pending) return;
+    openPendingCapture(res.pending);
+  } catch {
+    /* background may be unavailable */
+  }
+}
+
+function openPendingCapture(capture) {
+  const domain = vault.normalizeDomain(capture.url || capture.domain || "");
+  const existing = vault.findByDomainUsername(domain, capture.username || "");
+  if (existing) {
+    // Known domain + username: prefill the edit dialog with the new password.
+    openEdit(existing);
+    el.editTitle.textContent = "Update credential";
+    el.editPassword.value = capture.password || "";
+  } else {
+    openEdit(null);
+    el.editTitle.textContent = "Save detected credential";
+    el.editDomain.value = domain;
+    el.editUrl.value = capture.url || "";
+    el.editUsername.value = capture.username || "";
+    el.editPassword.value = capture.password || "";
+  }
+}
+
+// Refresh the list when the background saves a credential while the popup is open.
+// Only react to changes in chrome.storage.local (the persisted vault). The
+// chrome.storage.session cache is an internal write-through that restoreSession()
+// itself rewrites on every load, so reacting to "session" changes created an
+// infinite loop (restoreSession -> saveSession -> onChanged("session") -> ...).
+// That loop continuously reloaded the payload from the cache and could resurrect
+// a just-deleted entry — most visibly the last one, which then refused to stay
+// deleted. Background saves and popup edits both write the local vault, so
+// reacting to "local" alone still refreshes the list correctly.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (el.vaultScreen.hidden) return;
+  if (area !== "local") return;
+  vault.restoreSession().then(() => renderList()).catch(() => {});
+});
 
 el.togglePw.addEventListener("click", () => {
   el.editPassword.type = el.editPassword.type === "password" ? "text" : "password";

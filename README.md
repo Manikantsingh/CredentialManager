@@ -13,6 +13,8 @@ anywhere, so even Google Drive only sees scrambled data.
 
 - 🔐 **Stores your website logins securely** using strong AES‑GCM 256 encryption.
 - 🔑 **Protected by a single master password.** You remember one password; it unlocks all the others.
+- 🪄 **Detects logins as you type them.** When you sign in on a website, CredManager
+  offers to save (or update) that login with the details already filled in — one click.
 - ☁️ **Syncs to your own Google Drive** so you can back up and move your vault between computers.
 - 🗂️ **Keeps a separate entry for every website.** If you use the same username and
   password on two different sites, they are still saved as two separate logins.
@@ -85,6 +87,7 @@ This lets CredManager save your encrypted vault to *your* Drive. You only do thi
 | I want to… | Do this |
 |------------|---------|
 | **Add a login** | Click **+ Add**, enter the website, username, and password (or click ⚙ to generate one), then **Save**. |
+| **Save a login automatically** | Just sign in on a website as usual. A CredManager banner appears offering to **Save** (or **Update**) it. Click it — the entry is filled in for you. |
 | **Find a login** | Type a website or username in the search box. |
 | **Copy a username/password** | Click the 👤 or 🔑 button next to the entry. |
 | **Edit or delete** | Click ✎ to edit or 🗑 to delete an entry. |
@@ -96,6 +99,32 @@ This lets CredManager save your encrypted vault to *your* Drive. You only do thi
 > (for example after the Google sign‑in window appears), until you click **Lock**, close
 > Chrome, or 15 minutes of inactivity pass. You can change or disable this timeout with the
 > `AUTO_LOCK_MINUTES` setting in `config.js` (set it to `0` to lock every time the popup closes).
+
+### Saving logins automatically
+When you type a username and password on a website and submit the form, CredManager
+notices and shows a small banner in the corner of the page:
+
+- **Save password to CredManager?** — for a login it hasn't seen before.
+- **Update saved password?** — when you already have that site + username saved but the
+  password changed. It updates the existing entry instead of creating a duplicate.
+- **Unlock CredManager to save** — if your vault is locked. Click it, unlock with your
+  master password, and the login is filled into the Add/Update dialog for you to confirm.
+- **Never for this site** — stop offering to save on that website.
+
+Nothing is saved until you click the banner (or confirm in the popup). The detected
+password is only ever sent to *your* extension — never to the website or anywhere else.
+For a new detected login you can still edit the details before saving; auto‑detection is a
+best guess and works on most standard login and sign‑up forms.
+
+**Multi‑step logins (like Google):** When a site asks for your email on one page and your
+password on the next, CredManager captures both steps and still offers to save as normal.
+The save banner may appear on the page *after* login (e.g. your account dashboard) if the
+login page redirected before you had a chance to respond — this is intentional. The full
+save experience is still available there.
+
+> **Heads‑up on permissions:** to detect logins, the extension asks for access to the
+> pages you visit (`http://*/*` and `https://*/*`). It only reads the username/password you
+> type into a login form when you submit it, and it never sends page contents anywhere.
 
 ### About Google Drive sync
 - Your encrypted vault is saved as `credmanager-vault.json` inside a folder called
@@ -124,7 +153,12 @@ can decrypt an exported vault file locally on your computer (see *Advanced* belo
 useful for backups or verifying your data.
 
 **Does it autofill login forms?**
-Not yet — you copy the username/password with one click. Autofill can be added later.
+Yes. On any login page, focus the username or password field and a small CredManager key icon
+appears at the edge of the field. Click it to see the saved accounts for that site, then pick
+one to fill the username and password. If the vault is locked, the menu offers to unlock it
+first. You can still copy the username/password with one click from the popup if you prefer.
+For your safety, only accounts matching the current site are offered, the list shows usernames
+only until you choose one, and nothing is filled without your click.
 
 **Where is my vault stored on my computer?**
 In Chrome's encrypted local extension storage, as ciphertext (never in plain text). While

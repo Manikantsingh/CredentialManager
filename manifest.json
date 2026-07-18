@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "CredManager",
+  "version": "1.0.0",
+  "description": "Personal credentials manager with AES-GCM 256 encryption and Google Drive sync.",
+  "minimum_chrome_version": "102",
+  "permissions": ["identity", "storage"],
+  "host_permissions": [
+    "https://www.googleapis.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "CredManager"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

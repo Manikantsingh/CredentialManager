@@ -1,0 +1,140 @@
+:root {
+  --bg: #0f1420;
+  --panel: #1a2130;
+  --panel-2: #232c3d;
+  --text: #e7ecf3;
+  --muted: #93a0b4;
+  --accent: #4f8cff;
+  --accent-2: #3a6fd8;
+  --danger: #ff5c6c;
+  --ok: #35c98a;
+  --border: #2c374a;
+}
+
+* { box-sizing: border-box; }
+
+/* Ensure the `hidden` attribute always hides elements, even when a class
+   sets display (e.g. .overlay uses display:flex). Without this, hidden
+   overlays/screens would remain visible. */
+[hidden] { display: none !important; }
+
+body {
+  width: 380px;
+  min-height: 300px;
+  height: 540px;
+  margin: 0;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.brand-icon { width: 22px; height: 22px; }
+
+main { padding: 12px; }
+
+.screen { display: flex; flex-direction: column; gap: 10px; }
+
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field > span { font-size: 12px; color: var(--muted); }
+
+input, textarea {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+  outline: none;
+  width: 100%;
+}
+input:focus, textarea:focus { border-color: var(--accent); }
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-2); }
+button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+button.secondary:hover { border-color: var(--accent); }
+button.small { padding: 6px 10px; font-size: 13px; }
+button.link { background: none; color: var(--accent); padding: 4px; font-weight: 500; }
+button.icon-btn { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 6px 8px; }
+
+.hint { color: var(--muted); font-size: 13px; margin: 2px 0; }
+.error { color: var(--danger); font-size: 12px; min-height: 14px; margin: 0; }
+
+.toolbar { display: flex; gap: 8px; align-items: center; }
+.toolbar #search { flex: 1; }
+
+.sync-row { display: flex; gap: 8px; align-items: center; }
+.sync-status { font-size: 12px; color: var(--muted); margin-left: auto; }
+
+.list { display: flex; flex-direction: column; gap: 10px; max-height: 360px; overflow-y: auto; }
+
+.domain-group { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.domain-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; background: var(--panel-2); font-weight: 600;
+}
+.domain-head .count { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+.entry { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--border); }
+.entry-info { flex: 1; min-width: 0; }
+.entry-user { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entry-sub { font-size: 11px; color: var(--muted); }
+.entry-actions { display: flex; gap: 4px; }
+
+.overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; padding: 12px;
+  overflow-y: auto;
+}
+.dialog {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px; width: 100%; max-height: calc(100% - 24px);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.dialog h3 { margin: 0 0 4px; flex: 0 0 auto; }
+.dialog .field, .dialog #editError { flex: 0 0 auto; }
+.dialog-actions {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px;
+  flex: 0 0 auto; padding-top: 8px;
+}
+/* Scrollable body area so the action buttons stay visible on small popups. */
+.dialog-scroll {
+  overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  flex: 1 1 auto; min-height: 0;
+}
+
+.pw-row { display: flex; gap: 6px; }
+.pw-row input { flex: 1; }
+
+.toast {
+  position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%);
+  background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 14px; border-radius: 8px; font-size: 13px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.4);
+}
+
+.empty { color: var(--muted); text-align: center; padding: 20px; font-size: 13px; }

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CredManager</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <img src="icons/icon48.png" alt="" class="brand-icon" />
+        <span>CredManager</span>
+      </div>
+      <button id="lockBtn" class="icon-btn" title="Lock vault" hidden>Lock</button>
+    </header>
+
+    <main id="main">
+      <!-- Unlock / setup screen -->
+      <section id="unlockScreen" class="screen">
+        <p id="unlockHint" class="hint"></p>
+        <label class="field">
+          <span>Master password</span>
+          <input id="masterPassword" type="password" autocomplete="off" placeholder="Enter master password" />
+        </label>
+        <label class="field" id="confirmField" hidden>
+          <span>Confirm master password</span>
+          <input id="masterPasswordConfirm" type="password" autocomplete="off" placeholder="Re-enter master password" />
+        </label>
+        <button id="unlockBtn" class="primary">Unlock</button>
+        <button id="createBtn" class="secondary" hidden>Create new vault</button>
+        <button id="pullBtn" class="link">Load vault from Google Drive</button>
+        <p id="unlockError" class="error" role="alert"></p>
+      </section>
+
+      <!-- Vault screen -->
+      <section id="vaultScreen" class="screen" hidden>
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search domain or username..." />
+          <button id="addBtn" class="primary small">+ Add</button>
+        </div>
+        <div class="sync-row">
+          <button id="syncDownBtn" class="secondary small">↓ Pull from Drive</button>
+          <button id="syncUpBtn" class="secondary small">↑ Push to Drive</button>
+          <span id="syncStatus" class="sync-status"></span>
+        </div>
+        <div id="list" class="list"></div>
+      </section>
+    </main>
+
+    <!-- Add / edit dialog -->
+    <div id="editOverlay" class="overlay" hidden>
+      <div class="dialog">
+        <h3 id="editTitle">Add credential</h3>
+        <input type="hidden" id="editId" />
+        <div class="dialog-scroll">
+          <label class="field">
+            <span>Website / domain</span>
+            <input id="editDomain" type="text" placeholder="example.com" />
+          </label>
+          <label class="field">
+            <span>URL (optional)</span>
+            <input id="editUrl" type="text" placeholder="https://example.com/login" />
+          </label>
+          <label class="field">
+            <span>Username / email</span>
+            <input id="editUsername" type="text" autocomplete="off" />
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <span class="pw-row">
+              <input id="editPassword" type="password" autocomplete="off" />
+              <button id="togglePw" type="button" class="icon-btn" title="Show/Hide">👁</button>
+              <button id="genPw" type="button" class="icon-btn" title="Generate">⚙</button>
+            </span>
+          </label>
+          <label class="field">
+            <span>Notes (optional)</span>
+            <textarea id="editNotes" rows="2"></textarea>
+          </label>
+          <p id="editError" class="error"></p>
+        </div>
+        <div class="dialog-actions">
+          <button id="cancelEdit" class="secondary">Cancel</button>
+          <button id="saveEdit" class="primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
